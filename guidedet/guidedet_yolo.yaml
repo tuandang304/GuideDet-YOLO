@@ -24,7 +24,7 @@ head:
   - [-1, 1, nn.Upsample, [null, 4, nearest]]  # 12
   - [[-1, 6], 1, Concat, [1]]                 # 13
   - [-1, 2, C3k2, [512, true]]                # 14 stride 16 top-down
-  - [-1, 1, nn.Upsample, [null, 2, nearest]]  # 15 -> DySample
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]  # 15 t (stride 8)
   - [[-1, 4], 1, Concat, [1]]                 # 16 -> guided detail concat [t, f4, s]
   - [-1, 2, C3k2, [256, true]]                # 17 stride 8 output x3
   - [-1, 1, Conv, [256, 3, 2]]                # 18

@@ -3,7 +3,7 @@
 Code and trained weights for **GuideDet-YOLO: semantic guidance of high-resolution detail for lightweight object
 detection in UAV imagery** (accompanying manuscript).
 
-GuideDet-YOLO is a 1.57 M-parameter detector derived from YOLO26n. It keeps prediction at strides 8 and 16 and brings
+GuideDet-YOLO is a 1.54 M-parameter detector derived from YOLO26n. It keeps prediction at strides 8 and 16 and brings
 stride-4 detail into the stride-8 neck through a guided path instead of adding a stride-4 prediction level:
 
 - **Guided stride-4 detail path.** The top-down stride-8 feature `t` is compressed by a 1x1 convolution to 32 channels,
@@ -14,9 +14,8 @@ stride-4 detail into the stride-8 neck through a guided path instead of adding a
 - **LR-Down.** The stride-2 3x3 convolutions at L3, L5 and L8 are factorized as a rank-`c2/2` 3x3 stride-2
   convolution and a 1x1 convolution, initialized from the truncated SVD of the pretrained kernel.
 - **Stride-64 deep stage.** A 2x2 average pool (L7) makes the deepest stage (L8-L11) run at stride 64.
-- **DySample** point-sampling upsampler in front of the stride-8 concatenation (starts as nearest upsampling).
-- **Head:** a gated P4-to-P3 feedback and a stride-64 context skip into the classification branch (both zero at
-  initialization), a light classification branch, the one-to-many head of YOLO26n and NMS at inference.
+- **Two-level head:** predictions at strides 8 and 16 only (no stride-32 level), with the one-to-many head of
+  YOLO26n and NMS at inference.
 
 **GuideDet-YOLO-F** is the same detector with plain 3x3 stride-2 convolutions instead of LR-Down.
 
@@ -25,28 +24,30 @@ stride-4 detail into the stride-8 neck through a guided path instead of adding a
 | Model | val AP | test-dev AP | Params (M) | GFLOPs @1280 |
 |---|---|---|---|---|
 | YOLO26n (same recipe) | 30.84 ± 0.24 | 23.85 ± 0.44 | 2.38 | 22.75 |
-| **GuideDet-YOLO** | 31.02 ± 0.10 | 23.87 ± 0.10 | 1.57 | 17.80 |
-| **GuideDet-YOLO-F** | 31.46 ± 0.11 | 24.17 ± 0.10 | 1.76 | 19.57 |
+| **GuideDet-YOLO** | 30.94 ± 0.38 | 23.73 ± 0.12 | 1.54 | 17.52 |
+| **GuideDet-YOLO-F** | 31.09 ± 0.15 | 24.02 ± 0.08 | 1.74 | 19.29 |
 
 AP is averaged over IoU 0.50:0.95 with the ignored-region rule of the VisDrone toolkit (see `val.py`). Parameters and
 FLOPs are counted on the inference graph with batch normalization folded (for YOLO26n, without its training-only
 one-to-many branch); one multiply-accumulate counts as two FLOPs.
 
 With three seeds, neither variant differs significantly from YOLO26n in AP on either split (95% Welch intervals of
-the differences include zero); the variants match its accuracy with fewer parameters and FLOPs. GuideDet-YOLO-F was
-identified by the ablation after the main runs. See the paper for size-wise results, the ablation and limitations.
+the differences include zero); the variants match its accuracy with fewer parameters and FLOPs. See the paper for
+size-wise results, the ablation and limitations (in particular, both variants are less accurate than YOLO26n on large
+objects).
 
-### Size, memory and latency (seed-0 weights, 1280x1280, batch 1, one session: NVIDIA T4 + Intel Xeon 2.0 GHz)
+### Size, memory and latency (seed-0 weights, 1280x1280, batch 1, one session on an NVIDIA T4)
 
-| Model | ONNX file (MB) | Peak GPU memory (MB) | T4 PyTorch FP16 forward / end-to-end (ms) | T4 TensorRT FP16 end-to-end (ms) | CPU ONNX Runtime, 2 threads (ms) |
+| Model | ONNX file (MB) | Peak GPU memory (MB) | T4 PyTorch FP16 forward / end-to-end (ms) | T4 TensorRT FP16 end-to-end (ms) | Jetson Orin Nano TensorRT FP16 (ms) |
 |---|---|---|---|---|---|
-| YOLO26n | 9.9 | 65 | 12.3 / 24.5 | 19.0 | 231 |
-| GuideDet-YOLO | 6.9 | 128 | 12.5 / 24.6 | 19.4 | 367 |
-| GuideDet-YOLO-F | 7.7 | 129 | 12.4 / 24.5 | 19.4 | 372 |
+| YOLO26n | 9.9 | 64 | 9.8 / 19.0 | 15.6 | to be measured |
+| GuideDet-YOLO | 6.6 | 129 | 9.5 / 18.2 | 15.6 | to be measured |
+| GuideDet-YOLO-F | 7.4 | 129 | 9.4 / 17.9 | 15.3 | to be measured |
 
-Fewer parameters and FLOPs give a smaller model file, but **not** lower latency or memory: the variants are as fast as
-YOLO26n on the T4, about 60% slower on the CPU, and use twice the GPU memory (the stride-4 path works on 320x320
-feature maps). End-to-end includes NMS for the two variants; YOLO26n is NMS-free.
+Fewer parameters and FLOPs give a smaller model file but only small speed gains: on the T4 the variants are up to
+0.8 ms faster than YOLO26n in PyTorch FP16 and as fast with TensorRT, and they use twice the GPU memory (the stride-4
+path works on 320x320 feature maps). End-to-end includes NMS for the two variants; YOLO26n is NMS-free. PyTorch timings
+are medians of five rounds with shuffled model order (200 validation images after 30 warm-up images each).
 
 ## Installation
 
@@ -94,7 +95,8 @@ Ultralytics 8.4.192, 100 epochs at 1280x1280, MuSGD with learning rate 0.01, mom
 mixed precision, mosaic until the last epoch (`close_mosaic=0`), scale jitter 0.5, no mixup. The checkpoint with the best
 in-training validation fitness is kept. All weights start from the YOLO26n COCO checkpoint: source layers 0-6 map to
 0-6 and 7-19 to 8-20, the two prediction levels inherit the stride-8 and stride-16 levels of the source head, and
-LR-Down layers are initialized by SVD (435 of 561 state tensors of GuideDet-YOLO are copied unchanged).
+LR-Down layers are initialized by SVD (435 of 533 state tensors of GuideDet-YOLO, about 77% of its parameters, are
+copied unchanged).
 `train.py` writes `best_state_dict.pt` next to Ultralytics' `best.pt`, in the same format as the released weights.
 
 ## Evaluation protocol
@@ -109,7 +111,7 @@ an ignored region or a box of class "others" are dropped, as in the official too
 ```
 guidedet/
   guidedet_yolo.yaml   base graph (YOLO26n layers, stride-64 deep stage, two-level neck and head)
-  modules.py           LowRankDown (LR-Down), DySample, GuidedDetailConcat, GuidedDetect
+  modules.py           LowRankDown (LR-Down), GuidedDetailConcat (guided stride-4 detail path)
   model.py             build_model, inherit_coco (COCO weight inheritance + SVD init), load_model, load_yolo
 weights/               guidedet_yolo_s{0,1,2}.pt, guidedet_yolo_f_s{0,1,2}.pt (state_dicts, FP16)
 train.py  val.py  prepare_visdrone.py  count_cost.py  benchmark_latency.py

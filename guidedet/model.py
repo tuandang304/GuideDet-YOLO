@@ -5,11 +5,11 @@ Layer map (index: module):
   7     2x2 average pool (inserted), so L8-L11 run at stride 64
   8-11  deep stage (L8: LR-Down / Conv, C3k2, SPPF, C2PSA)
   12-14 x4 upsample, concat L6, C3k2 -> stride-16 top-down feature
-  15    DySample x2 -> t (stride 8)
+  15    nearest x2 upsample -> t (stride 8)
   16    guided detail concat [t, L4, s(L2)]
   17    C3k2 (cv1 widened by 64 zero-initialized input channels) -> x3
   18-20 Conv s2, concat L14, C3k2 -> x4
-  21    GuidedDetect on (x3, x4) with P4->P3 feedback and stride-64 context skip from L11
+  21    Detect on (x3, x4): one-to-many head, two levels (strides 8 and 16), NMS at inference
 """
 from __future__ import annotations
 
@@ -21,13 +21,13 @@ import torch
 import torch.nn as nn
 import yaml
 
-from .modules import DySample, GuidedDetailConcat, GuidedDetect, LowRankDown
+from .modules import GuidedDetailConcat, LowRankDown
 
 YAML = Path(__file__).with_name("guidedet_yolo.yaml")
 NAMES = ["pedestrian", "people", "bicycle", "car", "van", "truck", "tricycle", "awning-tricycle", "bus", "motor"]
 VARIANTS = {"guidedet-yolo": True, "guidedet-yolo-f": False}  # variant -> uses LR-Down at L3/L5/L8
 LOWRANK_LAYERS, LOWRANK_RATIO = (3, 5, 8), 0.5
-CTX_SRC, CTX_DIM, HEAD_C3 = 11, 32, 64
+HEAD_C3 = 64
 DETAIL_AT, DETAIL_SRC, DETAIL_MID, DETAIL_CH = 16, 2, 32, 64
 STRIDE_MULT = 64  # input sizes must be multiples of 64 (stride-64 deep stage)
 
@@ -42,10 +42,6 @@ def _replace(seq, i: int, new: nn.Module, f=None) -> None:
     new.i, new.f, new.type = old.i, old.f if f is None else f, f"guidedet.{type(new).__name__}"
     new.np = sum(p.numel() for p in new.parameters())
     seq[i] = new
-
-
-def _zero_bn(conv) -> None:
-    nn.init.zeros_(conv.bn.weight)
 
 
 def build_model(variant: str = "guidedet-yolo", nc: int = 10, verbose: bool = False):
@@ -66,18 +62,6 @@ def build_model(variant: str = "guidedet-yolo", nc: int = 10, verbose: bool = Fa
     det.cv3 = nn.ModuleList(nn.Sequential(nn.Sequential(DWConv(x, x, 3), Conv(x, HEAD_C3, 1)),
                                           nn.Sequential(DWConv(HEAD_C3, HEAD_C3, 3), Conv(HEAD_C3, HEAD_C3, 1)),
                                           nn.Conv2d(HEAD_C3, det.nc, 1)) for x in chx)
-    # head: stride-64 context skip (S1) and P4 -> P3 feedback (S2); both zero at initialization
-    det.__class__ = GuidedDetect
-    det.ctx = Conv(seq[CTX_SRC].cv2.conv.out_channels, CTX_DIM, 1, 1)
-    det.ctxo = nn.ModuleList(Conv(CTX_DIM, c, 1, 1, act=False) for c in chx)
-    for o in det.ctxo:
-        _zero_bn(o)
-    det.f = [*det.f, CTX_SRC]
-    det.fb = Conv(chx[1], chx[0], 1, 1, act=False)
-    _zero_bn(det.fb)
-    det.fba = nn.Conv2d(chx[0], 1, 1)
-    # neck: DySample replaces the nearest x2 upsample in front of the stride-8 concat
-    _replace(seq, DETAIL_AT - 1, DySample(seq[DETAIL_AT - 2].cv2.conv.out_channels, 2))
     # guided stride-4 detail path; the next C3k2 gets DETAIL_CH extra zero-weight input channels
     c_top, c_s4 = seq[DETAIL_AT - 2].cv2.conv.out_channels, seq[DETAIL_SRC].cv2.conv.out_channels
     _replace(seq, DETAIL_AT, GuidedDetailConcat(c_top, c_s4, DETAIL_MID, DETAIL_CH), f=[*seq[DETAIL_AT].f, DETAIL_SRC])
@@ -90,7 +74,7 @@ def build_model(variant: str = "guidedet-yolo", nc: int = 10, verbose: bool = Fa
         new.weight[:, :old.in_channels] = old.weight
     nxt.cv1.conv = new
     nxt.np = sum(p.numel() for p in nxt.parameters())
-    model.save = sorted(set(model.save) | {CTX_SRC, DETAIL_SRC})
+    model.save = sorted(set(model.save) | {DETAIL_SRC})
     det.bias_init()
     model.stride = torch.tensor([float(STRIDE_MULT)])  # letterbox multiple; Detect keeps its strides (8, 16)
     model.names = dict(enumerate(NAMES)) if nc == len(NAMES) else {i: str(i) for i in range(nc)}
