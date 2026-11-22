@@ -36,18 +36,40 @@ the differences include zero); the variants match its accuracy with fewer parame
 size-wise results, the ablation and limitations (in particular, both variants are less accurate than YOLO26n on large
 objects).
 
-### Size, memory and latency (seed-0 weights, 1280x1280, batch 1, one session on an NVIDIA T4)
+### Size, memory and latency (seed-0 weights, 1280x1280, batch 1; NVIDIA T4 in one session, Jetson Orin Nano 8 GB Super)
 
 | Model | ONNX file (MB) | Peak GPU memory (MB) | T4 PyTorch FP16 forward / end-to-end (ms) | T4 TensorRT FP16 end-to-end (ms) | Jetson Orin Nano TensorRT FP16 (ms) |
 |---|---|---|---|---|---|
-| YOLO26n | 9.9 | 64 | 9.8 / 19.0 | 15.6 | to be measured |
-| GuideDet-YOLO | 6.6 | 129 | 9.5 / 18.2 | 15.6 | to be measured |
-| GuideDet-YOLO-F | 7.4 | 129 | 9.4 / 17.9 | 15.3 | to be measured |
+| YOLO26n | 9.9 | 64 | 9.8 / 19.0 | 15.6 | 21.2 |
+| GuideDet-YOLO | 6.6 | 129 | 9.5 / 18.2 | 15.6 | 23.4 |
+| GuideDet-YOLO-F | 7.4 | 129 | 9.4 / 17.9 | 15.3 | 23.4 |
 
-Fewer parameters and FLOPs give a smaller model file but only small speed gains: on the T4 the variants are up to
-0.8 ms faster than YOLO26n in PyTorch FP16 and as fast with TensorRT, and they use twice the GPU memory (the stride-4
-path works on 320x320 feature maps). End-to-end includes NMS for the two variants; YOLO26n is NMS-free. PyTorch timings
-are medians of five rounds with shuffled model order (200 validation images after 30 warm-up images each).
+Fewer parameters and FLOPs give a smaller model file but no consistent speed gain: on the T4 the variants are up to
+0.8 ms faster than YOLO26n in PyTorch FP16 and as fast with TensorRT, while on the Jetson Orin Nano they are 2.2 ms
+(about 10%) slower with TensorRT. They also use more GPU memory (twice as much on the T4; the stride-4 path works on 320x320 feature
+maps). End-to-end times include NMS for all three models: YOLO26n is run with its one-to-many branch and NMS, as in all
+our measurements. PyTorch timings are medians of five rounds with shuffled model order (200 validation images after
+30 warm-up images each). Jetson: JetPack 7.2, MAXN SUPER power mode with `jetson_clocks`, TensorRT 10.16 FP16, each
+engine built in a fresh process, median of three rounds with shuffled model order.
+
+### Jetson Orin Nano: power modes, energy and INT8 (TensorRT, seed-0 weights, 1280x1280, batch 1)
+
+| Power mode | Model | FP16 end-to-end (ms) | INT8 end-to-end (ms) | FP16 energy per image (mJ) |
+|---|---|---|---|---|
+| MAXN SUPER | YOLO26n | 21.2 | 18.7 | 337 |
+| | GuideDet-YOLO | 23.4 | 20.0 | 371 |
+| | GuideDet-YOLO-F | 23.4 | 20.1 | 372 |
+| 25 W | YOLO26n | 23.7 | 21.0 | 339 |
+| | GuideDet-YOLO | 25.8 | 22.4 | 374 |
+| | GuideDet-YOLO-F | 25.8 | 22.5 | 376 |
+| 15 W | YOLO26n | 31.1 | 27.0 | 326 |
+| | GuideDet-YOLO | 34.3 | 29.3 | 362 |
+| | GuideDet-YOLO-F | 34.1 | 29.1 | 363 |
+
+The relative cost is the same in every power mode: about 10% slower and 10% more energy per image (board input
+power from `tegrastats`, idle draw included). The FP16 engine of GuideDet-YOLO is 23% smaller (5.9 vs 7.7 MB).
+INT8 engines are calibrated on 512 random training images. Accuracy of the engines on val: see the paper,
+Supplementary Table S3. Reproduce with `benchmark_jetson.py`.
 
 ## Installation
 
@@ -74,6 +96,9 @@ python train.py --data datasets/visdrone/data.yaml --variant guidedet-yolo-f --s
 # 4. Parameters / FLOPs on the fused graph, and GPU latency (FP16, batch 1)
 python count_cost.py --imgsz 1280
 python benchmark_latency.py --weights weights/guidedet_yolo_s0.pt --images datasets/visdrone/valid/images
+
+# 5. On an NVIDIA Jetson: TensorRT FP16/INT8 engines, latency, board energy and val AP (set the power mode first)
+python benchmark_jetson.py --weights weights/guidedet_yolo_s0.pt --root datasets/visdrone --int8 --ap
 ```
 
 In Python:
@@ -114,7 +139,7 @@ guidedet/
   modules.py           LowRankDown (LR-Down), GuidedDetailConcat (guided stride-4 detail path)
   model.py             build_model, inherit_coco (COCO weight inheritance + SVD init), load_model, load_yolo
 weights/               guidedet_yolo_s{0,1,2}.pt, guidedet_yolo_f_s{0,1,2}.pt (state_dicts, FP16)
-train.py  val.py  prepare_visdrone.py  count_cost.py  benchmark_latency.py
+train.py  val.py  prepare_visdrone.py  count_cost.py  benchmark_latency.py  benchmark_jetson.py
 ```
 
 ## Citation
