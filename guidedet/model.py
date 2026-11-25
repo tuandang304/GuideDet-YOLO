@@ -1,9 +1,9 @@
 """Build GuideDet-YOLO / GuideDet-YOLO-F as Ultralytics DetectionModels and initialize them from YOLO26n (COCO).
 
 Layer map (index: module):
-  0-6   YOLO26n backbone (L3, L5: LR-Down in GuideDet-YOLO, plain 3x3 s2 Conv in GuideDet-YOLO-F)
+  0-6   YOLO26n backbone (L3, L5: LRSC in GuideDet-YOLO, plain 3x3 s2 Conv in GuideDet-YOLO-F)
   7     2x2 average pool (inserted), so L8-L11 run at stride 64
-  8-11  deep stage (L8: LR-Down / Conv, C3k2, SPPF, C2PSA)
+  8-11  deep stage (L8: LRSC / Conv, C3k2, SPPF, C2PSA)
   12-14 x4 upsample, concat L6, C3k2 -> stride-16 top-down feature
   15    nearest x2 upsample -> t (stride 8)
   16    guided detail concat [t, L4, s(L2)]
@@ -25,7 +25,7 @@ from .modules import GuidedDetailConcat, LowRankDown
 
 YAML = Path(__file__).with_name("guidedet_yolo.yaml")
 NAMES = ["pedestrian", "people", "bicycle", "car", "van", "truck", "tricycle", "awning-tricycle", "bus", "motor"]
-VARIANTS = {"guidedet-yolo": True, "guidedet-yolo-f": False}  # variant -> uses LR-Down at L3/L5/L8
+VARIANTS = {"guidedet-yolo": True, "guidedet-yolo-f": False}  # variant -> uses LRSC at L3/L5/L8
 LOWRANK_LAYERS, LOWRANK_RATIO = (3, 5, 8), 0.5
 HEAD_C3 = 64
 DETAIL_AT, DETAIL_SRC, DETAIL_MID, DETAIL_CH = 16, 2, 32, 64
@@ -53,7 +53,7 @@ def build_model(variant: str = "guidedet-yolo", nc: int = 10, verbose: bool = Fa
         raise ValueError(f"variant must be one of {list(VARIANTS)}, got {variant!r}")
     model = DetectionModel(yaml.safe_load(YAML.read_text()), nc=nc, verbose=verbose)
     seq, det = model.model, model.model[-1]
-    if VARIANTS[variant]:  # LR-Down: rank r = c2 / 2 (32, 64, 128 at L3, L5, L8)
+    if VARIANTS[variant]:  # LRSC: rank r = c2 / 2 (32, 64, 128 at L3, L5, L8)
         for i in LOWRANK_LAYERS:
             c1, c2 = seq[i].conv.in_channels, seq[i].conv.out_channels
             _replace(seq, i, LowRankDown(c1, c2, int(LOWRANK_RATIO * c2)))
@@ -84,7 +84,7 @@ def build_model(variant: str = "guidedet-yolo", nc: int = 10, verbose: bool = Fa
 @torch.no_grad()
 def inherit_coco(model, src: str = "yolo26n.pt", verbose: bool = True) -> int:
     """Copy YOLO26n COCO tensors into `model`: source layers 0-6 -> 0-6, 7-19 -> 8-20, Detect levels P3/P4 -> 0/1.
-    LR-Down layers are initialized from the truncated SVD of the source kernel; the widened cv1 of L17 keeps the
+    LRSC layers are initialized from the truncated SVD of the source kernel; the widened cv1 of L17 keeps the
     pretrained slice and zero weights for the detail-path channels. Returns the number of tensors copied unchanged."""
     from ultralytics.nn.tasks import load_checkpoint
 
@@ -109,7 +109,7 @@ def inherit_coco(model, src: str = "yolo26n.pt", verbose: bool = True) -> int:
         if isinstance(layer, LowRankDown):
             e = layer.init_from(w.model[_src_layer(i)])
             if verbose:
-                print(f"[guidedet] L{i} LR-Down rank {layer.a.out_channels}/{layer.b.conv.out_channels}: "
+                print(f"[guidedet] L{i} LRSC rank {layer.a.out_channels}/{layer.b.conv.out_channels}: "
                       f"SVD retains {e:.3f} of the kernel energy", flush=True)
     i = DETAIL_AT + 1
     conv, s = model.model[i].cv1, _src_layer(i)

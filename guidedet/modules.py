@@ -10,8 +10,8 @@ from ultralytics.nn.modules.conv import Conv, DWConv
 
 
 class LowRankDown(nn.Module):
-    """LR-Down: a 3x3 stride-2 convolution factorized as 3x3-s2 (c1 -> r, no BN) then Conv-BN-SiLU 1x1 (r -> c2).
-    `init_from` copies the best rank-r approximation of a pretrained 3x3 kernel (truncated SVD)."""
+    """LRSC (low-rank strided convolution): a 3x3 stride-2 convolution factorized as 3x3-s2 (c1 -> r, no BN) then
+    Conv-BN-SiLU 1x1 (r -> c2). `init_from` copies the best rank-r approximation of a pretrained 3x3 kernel (SVD)."""
 
     def __init__(self, c1: int, c2: int, r: int):
         super().__init__()

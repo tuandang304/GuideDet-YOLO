@@ -1,7 +1,7 @@
 # GuideDet-YOLO
 
-Code and trained weights for **GuideDet-YOLO: semantic guidance of high-resolution detail for lightweight object
-detection in UAV imagery** (accompanying manuscript).
+Code and trained weights for **GuideDet-YOLO: Top-Down Guided Stride-4 Detail for Parameter-Efficient UAV Object
+Detection** (accompanying manuscript).
 
 GuideDet-YOLO is a 1.54 M-parameter detector derived from YOLO26n. It keeps prediction at strides 8 and 16 and brings
 stride-4 detail into the stride-8 neck through a guided path instead of adding a stride-4 prediction level:
