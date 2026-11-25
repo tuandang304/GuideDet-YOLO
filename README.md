@@ -11,13 +11,13 @@ stride-4 detail into the stride-8 neck through a guided path instead of adding a
   A pixel-unshuffle stem (depthwise 3x3, then 1x1 to 64 channels) moves the result to stride 8, and it joins the
   concatenation that feeds the finest neck block (L17). The new input channels of L17 start with zero weights, so
   training starts exactly at the function of the pretrained network.
-- **LR-Down.** The stride-2 3x3 convolutions at L3, L5 and L8 are factorized as a rank-`c2/2` 3x3 stride-2
-  convolution and a 1x1 convolution, initialized from the truncated SVD of the pretrained kernel.
+- **Low-rank strided convolutions (LRSC).** The stride-2 3x3 convolutions at L3, L5 and L8 are factorized as a rank-`c2/2` 3x3 stride-2
+  convolution and a 1x1 convolution (`LowRankDown` in `guidedet/modules.py`), initialized from the truncated SVD of the pretrained kernel.
 - **Stride-64 deep stage.** A 2x2 average pool (L7) makes the deepest stage (L8-L11) run at stride 64.
 - **Two-level head:** predictions at strides 8 and 16 only (no stride-32 level), with the one-to-many head of
   YOLO26n and NMS at inference.
 
-**GuideDet-YOLO-F** is the same detector with plain 3x3 stride-2 convolutions instead of LR-Down.
+**GuideDet-YOLO-F** is the same detector with plain 3x3 stride-2 convolutions instead of LRSC.
 
 ## Results (VisDrone2019-DET, 1280x1280, 100 epochs, mean ± s.d. over seeds 0, 1, 2)
 
@@ -28,8 +28,8 @@ stride-4 detail into the stride-8 neck through a guided path instead of adding a
 | **GuideDet-YOLO-F** | 31.09 ± 0.15 | 24.02 ± 0.08 | 1.74 | 19.29 |
 
 AP is averaged over IoU 0.50:0.95 with the ignored-region rule of the VisDrone toolkit (see `val.py`). Parameters and
-FLOPs are counted on the inference graph with batch normalization folded (for YOLO26n, without its training-only
-one-to-many branch); one multiply-accumulate counts as two FLOPs.
+FLOPs are counted on the inference graph with batch normalization folded (for YOLO26n, with only one of its two
+equal-size head branches); one multiply-accumulate counts as two FLOPs.
 
 With three seeds, neither variant differs significantly from YOLO26n in AP on either split (95% Welch intervals of
 the differences include zero); the variants match its accuracy with fewer parameters and FLOPs. See the paper for
@@ -68,8 +68,7 @@ engine built in a fresh process, median of three rounds with shuffled model orde
 
 The relative cost is the same in every power mode: about 10% slower and 10% more energy per image (board input
 power from `tegrastats`, idle draw included). The FP16 engine of GuideDet-YOLO is 23% smaller (5.9 vs 7.7 MB).
-INT8 engines are calibrated on 512 random training images. Accuracy of the engines on val: see the paper,
-Supplementary Table S3. Reproduce with `benchmark_jetson.py`.
+INT8 engines are calibrated on 512 random training images. Accuracy of the engines on val: see Table 7 of the paper. Reproduce with `benchmark_jetson.py`.
 
 ## Installation
 
@@ -119,9 +118,9 @@ Ultralytics 8.4.192, 100 epochs at 1280x1280, MuSGD with learning rate 0.01, mom
 3 warm-up epochs and linear decay to 1% of the initial rate, batch 8 with gradient accumulation to a nominal batch of 64,
 mixed precision, mosaic until the last epoch (`close_mosaic=0`), scale jitter 0.5, no mixup. The checkpoint with the best
 in-training validation fitness is kept. All weights start from the YOLO26n COCO checkpoint: source layers 0-6 map to
-0-6 and 7-19 to 8-20, the two prediction levels inherit the stride-8 and stride-16 levels of the source head, and
-LR-Down layers are initialized by SVD (435 of 533 state tensors of GuideDet-YOLO, about 77% of its parameters, are
-copied unchanged).
+0-6 and 7-19 to 8-20, the two prediction levels inherit the stride-8 and stride-16 box branches of the source head, and
+LRSC layers (`LowRankDown`) are initialized by SVD (77.7% of the learnable parameters of GuideDet-YOLO are copied
+unchanged, including the pretrained slice of L17, and 18.3% are initialized by SVD).
 `train.py` writes `best_state_dict.pt` next to Ultralytics' `best.pt`, in the same format as the released weights.
 
 ## Evaluation protocol
@@ -136,7 +135,7 @@ an ignored region or a box of class "others" are dropped, as in the official too
 ```
 guidedet/
   guidedet_yolo.yaml   base graph (YOLO26n layers, stride-64 deep stage, two-level neck and head)
-  modules.py           LowRankDown (LR-Down), GuidedDetailConcat (guided stride-4 detail path)
+  modules.py           LowRankDown (LRSC), GuidedDetailConcat (guided stride-4 detail path)
   model.py             build_model, inherit_coco (COCO weight inheritance + SVD init), load_model, load_yolo
 weights/               guidedet_yolo_s{0,1,2}.pt, guidedet_yolo_f_s{0,1,2}.pt (state_dicts, FP16)
 train.py  val.py  prepare_visdrone.py  count_cost.py  benchmark_latency.py  benchmark_jetson.py
